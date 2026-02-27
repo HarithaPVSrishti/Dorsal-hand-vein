@@ -1,0 +1,24 @@
+# AI Models (Include since they are small enough)
+# !Models/
+
+# Documentation
+!Docs/
+
+# Data (Ignore large datasets to keep repo clean)
+Data/Total_Vein_Dataset/
+Data/Processed_Vein_Images/
+
+# Keep the UI image
+!Data/image.jpg
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
