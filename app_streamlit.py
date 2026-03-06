@@ -6,6 +6,8 @@ import cv2
 import pickle
 import os
 import math
+import json
+import hashlib
 from scipy.signal import convolve2d
 import scipy.ndimage as ndimage
 from sklearn.preprocessing import LabelEncoder
@@ -15,7 +17,7 @@ st.set_page_config(
     page_title="VeinAuth - Dorsal Hand Vein Authentication",
     page_icon="🖐️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
 # --- Session State Initialization ---
@@ -25,6 +27,8 @@ if 'username' not in st.session_state:
     st.session_state['username'] = None
 if 'current_page' not in st.session_state:
     st.session_state['current_page'] = "Home"
+if 'reg_form_id' not in st.session_state:
+    st.session_state['reg_form_id'] = 0
 
 # --- Styling (RESTORED PREMIUM UI) ---
 st.markdown("""
@@ -42,8 +46,9 @@ html, body, [data-testid="stAppViewContainer"] {
     -webkit-text-fill-color: transparent;
     font-weight: 800;
     text-align: center;
-    font-size: 3.5rem;
-    margin-bottom: 0.5rem;
+    font-size: 3.2rem;
+    margin-bottom: 0rem;
+    padding-bottom: 0rem;
 }
 
 .sub-header {
@@ -54,16 +59,12 @@ html, body, [data-testid="stAppViewContainer"] {
     padding-left: 15px;
 }
 
-/* Glassmorphism Card Style */
-.stCard {
-    background: rgba(255, 255, 255, 0.7);
-    backdrop-filter: blur(10px);
-    -webkit-backdrop-filter: blur(10px);
+/* Removed stCard manual div styling and moved to container-based targeting */
+[data-testid="stVerticalBlock"] > div.element-container:has(#about-the-system) + div {
+    background: rgba(255, 255, 255, 0.4);
+    backdrop-filter: blur(12px);
     border-radius: 20px;
-    border: 1px solid rgba(255, 255, 255, 0.3);
-    padding: 2.5rem;
-    box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.08);
-    margin-bottom: 2rem;
+    padding: 20px;
 }
 
 /* Button styling */
@@ -84,13 +85,83 @@ html, body, [data-testid="stAppViewContainer"] {
     background: linear-gradient(90deg, #2563eb, #1e40af);
 }
 
-/* Sidebar styling */
-section[data-testid="stSidebar"] {
-    background-color: #0f172a !important;
+/* Hide Sidebar */
+[data-testid="stSidebar"] {
+    display: none;
 }
-section[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] p {
-    color: #e2e8f0;
-    font-size: 1.1rem;
+[data-testid="collapsedControl"] {
+    display: none;
+}
+
+/* Horizontal Radio Button Navigation Hub */
+div.stRadio > div {
+    flex-direction: row;
+    justify-content: center;
+    gap: 20px;
+}
+
+div.stRadio > div > label {
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 12px;
+    padding: 10px 25px !important;
+    border: 1px solid rgba(255, 255, 255, 0.3);
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+div.stRadio > div > label:hover {
+    background: rgba(255, 255, 255, 0.7);
+}
+
+div.stRadio > div > label[data-baseweb="radio"] > div:first-child {
+    display: none;
+}
+
+div.stRadio > div > label p {
+    font-size: 1.1rem !important;
+    font-weight: 600 !important;
+    color: #1e3a8a !important;
+}
+
+div[data-role="radiogroup"] {
+    margin-top: -10px;
+    margin-bottom: 5px;
+}
+
+div[data-role="radiogroup"] > label[data-baseweb="radio"] {
+    background: rgba(255, 255, 255, 0.4);
+    border-radius: 15px;
+    padding: 12px 24px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+div[data-role="radiogroup"] > label[data-baseweb="radio"][aria-checked="true"] {
+    background: linear-gradient(90deg, #3b82f6, #1d4ed8);
+    border: none;
+}
+
+div[data-role="radiogroup"] > label[data-baseweb="radio"][aria-checked="true"] p {
+    color: white !important;
+}
+
+/* Biometric Metric Scaling - Making Value same size as Label */
+[data-testid="stMetricValue"] {
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+}
+[data-testid="stMetricLabel"] p {
+    font-size: 1rem !important;
+    font-weight: 600 !important;
+    color: #1e3a8a !important;
+}
+
+/* Tighten Streamlit default padding */
+[data-testid="stAppViewBlockContainer"] {
+    padding-top: 0rem !important;
+    padding-bottom: 1rem !important;
+}
+[data-testid="stHeader"] {
+    background: rgba(0,0,0,0);
 }
 </style>
 """, unsafe_allow_html=True)
@@ -187,9 +258,10 @@ def load_assets():
     base_dir = os.path.dirname(os.path.abspath(__file__))
     model_dir = os.path.join(base_dir, "Models")
     cnn = tf.keras.models.load_model(os.path.join(model_dir, 'cnn_model.h5'))
+    hand_detector = tf.keras.models.load_model(os.path.join(model_dir, 'hand_detection_model.h5'))
     with open(os.path.join(model_dir, 'Svm_model.pkl'), 'rb') as f: svm = pickle.load(f)
     with open(os.path.join(model_dir, 'label_encoder.pkl'), 'rb') as f: le = pickle.load(f)
-    return cnn, svm, le
+    return cnn, svm, le, hand_detector
 
 # --- Page Layout Functions ---
 
@@ -209,10 +281,9 @@ def show_home():
         if os.path.exists(img_path): st.image(img_path, use_container_width=True)
 
 def show_about():
-    st.markdown('<h1 class="main-header">About the System</h1>', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header" style="font-size: 2.2rem; margin-bottom: 1rem;">About the System</h1>', unsafe_allow_html=True)
     
-    st.markdown('<div class="stCard">', unsafe_allow_html=True)
-    st.markdown('<h3 class="sub-header">What is Dorsal Vein Detection?</h3>', unsafe_allow_html=True)
+    st.markdown('<h3 class="sub-header" style="margin-top: 0;">What is Dorsal Vein Detection?</h3>', unsafe_allow_html=True)
     st.write("""
     Dorsal hand vein detection is a cutting-edge biometric technology that identifies individuals based on the unique vascular patterns on the back of the hand. 
     Unlike fingerprints or facial features, vein patterns are **internal**—hidden beneath the skin's surface—making them virtually impossible to forge or replicate.
@@ -245,14 +316,13 @@ def show_about():
     *   **Enterprise**: Secure employee attendance and access to server rooms or labs.
     *   **Smart Homes**: Keyless entry for private residences with maximum security.
     """)
-    st.markdown('</div>', unsafe_allow_html=True)
 
 def show_auth_system():
     if not st.session_state['authenticated']:
         st.warning("Locked. Please Login.")
         return
     st.markdown('<h1 class="main-header">Authentication Portal</h1>', unsafe_allow_html=True)
-    cnn, svm, le = load_assets()
+    cnn, svm, le, hand_detector = load_assets()
     col1, col2 = st.columns(2)
     with col1:
         st.write("### Step 1: Upload Hand Image")
@@ -264,9 +334,20 @@ def show_auth_system():
         with col1: st.image(cv2.cvtColor(img_resized, cv2.COLOR_BGR2RGB), caption="Input Hand Image", use_container_width=True)
         
         if st.button("🔍 Run Biometric Scan"):
-            with st.spinner("Analyzing venous patterns..."):
-                gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
-                _, mask = vein_pattern_extraction(gray)
+            with st.spinner("Analyzing image..."):
+                # --- Pre-Screening: Hand detection ---
+                hand_img_norm = img_resized.astype(np.float32) / 255.0
+                hand_input = np.expand_dims(hand_img_norm, axis=0)
+                hand_prob = hand_detector.predict(hand_input, verbose=0)[0][0]
+                
+                # Classes: {'hand': 0, 'non hand': 1}
+                if hand_prob > 0.5:
+                    st.error("🚫 **Object Rejected:** This is not a hand image with detectable veins. Please upload a clear dorsal hand image.")
+                    return
+
+                with st.spinner("Extracting venous patterns..."):
+                    gray = cv2.cvtColor(img_resized, cv2.COLOR_BGR2GRAY)
+                    _, mask = vein_pattern_extraction(gray)
                 with col2:
                     st.write("### Step 2: Extracted Features")
                     st.image(mask, caption="Processed Vein Skeleton", use_container_width=True)
@@ -300,21 +381,115 @@ def on_nav_change():
     if "nav_radio" in st.session_state:
         st.session_state['current_page'] = st.session_state["nav_radio"]
 
+# --- User Management Helper Functions ---
+USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+
+def get_all_users():
+    if not os.path.exists(USERS_FILE):
+        return {}
+    try:
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {}
+
+def hash_string(string):
+    return hashlib.sha256(string.encode()).hexdigest()
+
+def register_user(username, password):
+    users = get_all_users()
+    if username in users:
+        return False, "Username already exists."
+    users[username] = hash_string(password)
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
+    return True, "Registration successful!"
+
+def authenticate_user(username, password):
+    users = get_all_users()
+    if username not in users:
+        return False
+    return users[username] == hash_string(password)
+
+def show_login_page():
+    col1, col2, col3 = st.columns([0.5, 2, 0.5])
+    with col2:
+        # Determine the dynamic heading based on current selection
+        current_mode = st.session_state.get('auth_mode', 'Login')
+        page_title = "Login Page" if current_mode == "Login" else "Registration Page"
+        
+        st.markdown(f'<h1 class="main-header" style="font-size: 2.2rem; margin-bottom: 1rem;">{page_title}</h1>', unsafe_allow_html=True)
+        mode = st.radio("Select Action", ["Login", "Register"], horizontal=True, label_visibility="collapsed", key="auth_mode")
+        st.markdown("---")
+        
+        if mode == "Login":
+            st.subheader("Existing User Login")
+            user = st.text_input("Username", placeholder="Enter your name", key="login_user")
+            pwd = st.text_input("Password", type="password", key="login_pwd")
+            if st.button("Sign In", key="login_btn"):
+                if user and pwd:
+                    if authenticate_user(user, pwd):
+                        st.session_state['authenticated'] = True
+                        st.session_state['username'] = user
+                        st.session_state['current_page'] = "Authentication Portal"
+                        st.success(f"Welcome, {user}!")
+                        st.rerun()
+                    else:
+                        st.error("Invalid username or password.")
+                else:
+                    st.error("Please enter both username and password.")
+        else:
+            # Use dynamic keys to allow safe form reset after registration
+            form_id = st.session_state['reg_form_id']
+            st.subheader("Create New Account")
+            new_user = st.text_input("Desired Username", key=f"reg_user_{form_id}")
+            new_pwd = st.text_input("Password", type="password", key=f"reg_pwd_{form_id}")
+            confirm_pwd = st.text_input("Confirm Password", type="password", key=f"reg_confirm_{form_id}")
+            
+            if st.button("Register", key=f"reg_btn_{form_id}"):
+                if not new_user or not new_pwd:
+                    st.error("Please fill in all fields.")
+                elif new_pwd != confirm_pwd:
+                    st.error("Passwords do not match.")
+                elif len(new_pwd) < 4:
+                    st.error("Password must be at least 4 characters.")
+                else:
+                    success, message = register_user(new_user, new_pwd)
+                    if success:
+                        # Increment ID to 'reset' all widgets at once
+                        st.session_state['reg_form_id'] += 1
+                        st.session_state['reg_success'] = True
+                        st.session_state['reg_message'] = message
+                        st.rerun() # Refresh with new keys
+                    else:
+                        st.error(message)
+
+        # Show success message if registration just happened
+        if st.session_state.get('reg_success'):
+            st.success("Registration Successful! Please switch to Login.")
+            st.session_state['reg_success'] = False
+
 def main():
-    st.sidebar.title("🖐️ VeinAuth")
-    
+    # Page Header (Shifted up to remove top gap)
+    st.markdown('<div style="text-align: center; margin-top: -30px; margin-bottom: 0px;">', unsafe_allow_html=True)
+    st.markdown('<h1 class="main-header" style="font-size: 2.6rem; margin-top: 0;">🖐️ VeinAuth</h1>', unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
+
     pages_logged_in = ["Home", "About", "Authentication Portal", "Logout"]
-    pages_logged_out = ["Home", "About", "Login"]
+    pages_logged_out = ["Home", "About", "Login/Registration"]
     
     current_list = pages_logged_in if st.session_state['authenticated'] else pages_logged_out
     
     if st.session_state['current_page'] not in current_list:
         st.session_state['current_page'] = "Home"
         
-    page = st.sidebar.radio(
-        "Menu", 
+    # Top Navigation Tabs
+    page = st.radio(
+        "Navigation", 
         current_list, 
         index=current_list.index(st.session_state['current_page']),
+        horizontal=True,
+        label_visibility="collapsed",
         key="nav_radio",
         on_change=on_nav_change
     )
@@ -324,38 +499,7 @@ def main():
     if current_page == "Home": show_home()
     elif current_page == "About": show_about()
     elif current_page == "Authentication Portal": show_auth_system()
-    elif current_page == "Login":
-        st.markdown('<h1 class="main-header">Account Management</h1>', unsafe_allow_html=True)
-        col1, col2, col3 = st.columns([1, 2, 1])
-        with col2:
-            st.markdown('<div class="stCard">', unsafe_allow_html=True)
-            mode = st.radio("Select Action", ["Login", "Register"], horizontal=True, label_visibility="collapsed")
-            st.markdown("---")
-            
-            if mode == "Login":
-                st.subheader("Existing User Login")
-                user = st.text_input("Username", placeholder="Enter your name")
-                pwd = st.text_input("Password", type="password")
-                if st.button("Sign In"):
-                    if user:
-                        st.session_state['authenticated'] = True
-                        st.session_state['username'] = user
-                        st.session_state['current_page'] = "Authentication Portal"
-                        st.success(f"Welcome, {user}!")
-                        st.rerun()
-                    else:
-                        st.error("Please enter your name.")
-            else:
-                st.subheader("Create New Account")
-                new_user = st.text_input("Desired Username")
-                new_pwd = st.text_input("Password", type="password")
-                confirm_pwd = st.text_input("Confirm Password", type="password")
-                if st.button("Register"):
-                    if new_user and new_pwd == confirm_pwd and len(new_pwd) > 3:
-                        st.success("Registration Successful! Please switch to Login.")
-                    else:
-                        st.error("Invalid registration details.")
-            st.markdown('</div>', unsafe_allow_html=True)
+    elif current_page == "Login/Registration": show_login_page()
     elif current_page == "Logout":
         st.session_state['authenticated'], st.session_state['current_page'] = False, "Home"
         st.rerun()
